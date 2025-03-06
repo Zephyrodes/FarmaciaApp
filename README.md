@@ -91,3 +91,9 @@ El código se organiza en las siguientes secciones:
 
 - **Descuentos por EPS:**  
   El descuento se aplica a toda la orden en base al descuento asociado a la EPS del cliente.
+
+## Integrantes:
+- Miguel Velasco
+- Juan Ballesteros
+- Manuel Cardenas
+- Juan Wilches
