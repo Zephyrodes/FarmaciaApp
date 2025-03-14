@@ -1,9 +1,9 @@
 import os
 from datetime import datetime
 from typing import List
-
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Float
@@ -255,6 +255,21 @@ init_db()
 # Instancia de FastAPI
 # -----------------------------
 app = FastAPI()
+
+# -----------------------------
+# Cross-Origin Resource Sharing
+# -----------------------------
+origins = [
+    "http://localhost:3000",  # Origen de tu frontend
+    # Puedes agregar otros orígenes si es necesario
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,            # Permite estos orígenes
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -----------------------------
 # Endpoints de Autenticación y Usuarios
