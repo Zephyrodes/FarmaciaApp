@@ -1,99 +1,166 @@
-# Sistema de Gestión de Farmacia con FastAPI
+# Sistema de Gestión de Farmacia
 
-Este proyecto es una API para gestionar una farmacia que permite administrar usuarios, productos, órdenes de compra, asignación de EPS (Entidad Promotora de Salud) y el registro de movimientos económicos y de stock. La API está construida con **FastAPI**, utiliza **SQLAlchemy** para la persistencia en una base de datos SQLite y **Pydantic** para la validación de datos.
+Este proyecto es una aplicación completa para la gestión integral de una farmacia. Está compuesta por:
+
+- **Backend:** API RESTful desarrollada en **FastAPI** que permite la administración de usuarios, productos, órdenes, EPS, y el registro de movimientos económicos y de stock.
+- **Frontend:** Interfaz de usuario (desarrollada en React) para interactuar con la API.
+- **Contenedores Docker:** Configuración para desplegar fácilmente tanto el backend como el frontend utilizando Docker y Docker Compose.
 
 ## Características Principales
 
-- **Gestión de Usuarios:**  
+### Backend (FastAPI)
+- **Gestión de Usuarios:**
   - Registro, listado, actualización y eliminación de usuarios.
-  - Los usuarios tienen roles (admin, almacenista, cliente).
-  - Los clientes pueden tener asignada una EPS, que otorga descuentos.
+  - Roles: *admin*, *almacenista* y *cliente*.
+  - Autenticación con OAuth2 y token Bearer.
 
-- **Gestión de Productos:**  
+- **Gestión de Productos:**
   - Creación, listado, actualización y eliminación de productos.
-  - Manejo de stock, con un endpoint para eliminar productos sin stock.
+  - Manejo de stock, incluyendo endpoint para eliminar productos sin stock.
 
-- **Gestión de Órdenes:**  
+- **Gestión de Órdenes:**
   - Creación de órdenes asociadas automáticamente al usuario autenticado.
-  - Cálculo del total de la orden con descuento aplicado (si el cliente tiene EPS asignada).
+  - Cálculo de totales con aplicación de descuentos según EPS asignada.
   - Confirmación y cancelación de órdenes.
+  - Registro automático de movimientos financieros y de stock al confirmar una orden.
 
-- **Registro de Movimientos Económicos y de Stock:**  
-  - Al confirmar una orden, se registran:
-    - Movimientos financieros, con el total (descontado) y descripción.
-    - Movimientos de stock, indicando la disminución de cada producto.
+- **Gestión de EPS:**
+  - Creación y listado de EPS (solo accesible para administradores).
+  - Asignación de EPS a clientes para aplicar descuentos en las órdenes.
 
-## Requisitos
+- **Registro de Movimientos:**
+  - Consultas de movimientos financieros y de stock (acceso restringido a admin y almacenista).
 
-- **Python 3.8+**
-- **FastAPI**
-- **Uvicorn** (para correr el servidor)
-- **SQLAlchemy**
-- **Pydantic**
-- **Passlib** (para el manejo de contraseñas)
+### Frontend (React)
+- Interfaz moderna para:
+  - **Autenticación:** Inicio de sesión y registro.
+  - **Gestión de Productos:** Visualización, creación y edición de productos.
+  - **Gestión de Órdenes:** Realización y seguimiento de órdenes.
+  - **Administración:** Módulos para gestión de usuarios, EPS, y consulta de movimientos.
+- Comunicación directa con la API RESTful del backend.
 
-Puedes instalar las dependencias necesarias utilizando `pip`:
-
-```bash
-pip install fastapi uvicorn sqlalchemy pydantic passlib[bcrypt]
-```
-
-## Endpoints Principales
-
-### Autenticación y Gestión de Usuarios
-- **POST /register**: Registrar un nuevo usuario (solo admin).
-- **POST /token**: Generar token de autenticación.
-- **GET /users/**: Listar todos los usuarios (solo admin).
-- **GET /users/{id}**: Obtener detalles de un usuario (solo admin).
-- **PUT /users/{id}** y **DELETE /users/{id}**: Actualización y eliminación de usuarios.
-
-### Gestión de Productos
-- **POST /products/**: Crear un nuevo producto (admin y almacenista).
-- **GET /products/**: Listar todos los productos.
-- **GET /products/{id}**: Obtener detalles de un producto.
-- **PUT /products/{id}** y **DELETE /products/{id}**: Actualizar y eliminar productos.
-- **DELETE /products/out-of-stock**: Eliminar productos sin stock.
-
-### Gestión de Órdenes
-- **POST /orders/**: Crear una nueva orden.  
-  La orden se crea automáticamente utilizando el usuario autenticado y se calcula el total con descuento (si corresponde).
-- **GET /orders/**: Listar órdenes. Los clientes solo verán sus órdenes.
-- **GET /orders/{id}**: Obtener detalles de una orden.
-- **PUT /orders/{id}**: Actualizar una orden (sin modificar el comprador).
-- **DELETE /orders/{id}**: Cancelar una orden pendiente.
-- **POST /orders/{id}/confirm**: Confirmar una orden y registrar los movimientos económicos y de stock.
-
-### Gestión de EPS
-- **POST /eps/**: Crear una nueva EPS (solo admin).
-- **GET /eps/**: Listar todas las EPS.
-- **POST /assign_eps/**: Asignar una EPS a un cliente.
-
-### Registro de Movimientos
-- **GET /financial_movements/**: Listar movimientos financieros (solo admin y almacenista).
-- **GET /stock_movements/**: Listar movimientos de stock (solo admin y almacenista).
+### Despliegue con Docker
+- **Dockerfile:** Configuraciones separadas para backend y frontend.
+- **Docker Compose:** Orquestación de contenedores para facilitar el despliegue completo del sistema.
 
 ## Estructura del Proyecto
 
-El código se organiza en las siguientes secciones:
-- **Configuración de la Base de Datos:** Conexión y creación de tablas.
-- **Modelos SQLAlchemy:** Definición de las tablas para usuarios, productos, órdenes, EPS y movimientos.
-- **Utilidades y Funciones Auxiliares:** Funciones comunes para la gestión de la base de datos, autenticación y verificación.
-- **Esquemas Pydantic:** Validación de datos para las peticiones.
-- **Endpoints:** Rutas para gestionar autenticación, usuarios, productos, órdenes, EPS y movimientos.
+```plaintext
+Farmacia/
+├── backend/               # API en FastAPI
+│   ├── farmacia.py        # Archivo principal de la API
+│   ├── requirements.txt   # Dependencias del backend
+│   ├── Dockerfile         # Dockerfile para el backend
+│   ├── ADB.db             # Base de datos SQLite (archivo de ejemplo)
+│   └── ...                # Otros módulos y archivos (modelos, rutas, etc.)
+├── frontend/              # Aplicación en React
+│   ├── src/               # Código fuente del frontend
+│   │   ├── components/    # Componentes React (Login, Register, Products, etc.)
+│   │   ├── services/      # Configuración para consumir la API
+│   │   ├── App.js         # Componente principal de la aplicación
+│   │   └── ...            # Otros archivos y assets (CSS, imágenes, etc.)
+│   ├── public/            # Archivos públicos (index.html, logos, manifest, etc.)
+│   ├── Dockerfile         # Dockerfile para el frontend
+│   ├── package.json       # Dependencias y scripts de npm
+│   └── package-lock.json
+└── docker-compose.yml     # Orquestación de contenedores para backend y frontend
+```
 
-## Cualidades
+## Requisitos
 
-- **Seguridad:**  
-  La autenticación se basa en OAuth2 con contraseña y token Bearer. Se han implementado verificadores de roles para restringir el acceso a ciertos endpoints.
+- **Docker** y **Docker Compose** instalados en tu sistema.
+- Alternativamente, para desarrollo local:
+  - **Python 3.8+**
+  - **Node.js** y **npm** (para el frontend)
+  - Dependencias de Python listadas en `backend/requirements.txt`
 
-- **Movimientos Económicos y de Stock:**  
-  Al confirmar una orden, se registran tanto el movimiento financiero como los cambios de stock, permitiendo llevar un historial de las transacciones y el estado del inventario.
+## Instalación y Ejecución
 
-- **Descuentos por EPS:**  
-  El descuento se aplica a toda la orden en base al descuento asociado a la EPS del cliente.
+### Usando Docker
+
+1. **Clona el repositorio:**
+
+   ```bash
+   git clone https://github.com/tu-usuario/farmacia.git
+   cd farmacia
+   ```
+
+2. **Construye y levanta los contenedores con Docker Compose:**
+
+   ```bash
+   docker-compose up --build
+   ```
+
+   Esto iniciará:
+   - El **backend** en FastAPI, disponible en `http://localhost:8000` (documentación en `/docs`).
+   - El **frontend** en React, accesible en `http://localhost:3000`.
+
+### Ejecución en Desarrollo
+
+#### Backend
+
+1. Accede al directorio `backend`:
+
+   ```bash
+   cd Farmacia/backend
+   ```
+
+2. Crea un entorno virtual e instala las dependencias:
+
+   ```bash
+   python -m venv env
+   source env/bin/activate  # En Windows: env\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+3. Ejecuta el servidor:
+
+   ```bash
+   uvicorn farmacia:app --reload
+   ```
+
+   La API estará en `http://localhost:8000`.
+
+#### Frontend
+
+1. Accede al directorio `frontend`:
+
+   ```bash
+   cd Farmacia/frontend
+   ```
+
+2. Instala las dependencias:
+
+   ```bash
+   npm install
+   ```
+
+3. Inicia la aplicación:
+
+   ```bash
+   npm start
+   ```
+
+   La aplicación se abrirá en `http://localhost:3000`.
+
+## Uso de la API
+
+Consulta la documentación interactiva generada por FastAPI en `http://localhost:8000/docs` para probar y explorar todos los endpoints disponibles.
 
 ## Integrantes:
 - Miguel Velasco
 - Juan Ballesteros
 - Manuel Cardenas
 - Juan Wilches
+
+
+## Contribuciones
+
+Las contribuciones son bienvenidas. Para colaborar:
+- Realiza un fork del repositorio.
+- Crea una rama para tu feature o fix.
+- Envía un pull request describiendo los cambios.
+
+## Licencia
+
+Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
