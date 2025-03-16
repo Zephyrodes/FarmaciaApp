@@ -1,6 +1,6 @@
 import os
-from datetime import datetime
-from typing import List
+from datetime import datetime, timedelta
+from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +8,8 @@ from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Float
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy.orm import sessionmaker, Session, relationship, joinedload
+import jwt  # Importamos PyJWT
 
 # -----------------------------
 # Configuración de la base de datos
@@ -23,6 +24,11 @@ Base = declarative_base()
 # -----------------------------
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Constantes para JWT
+SECRET_KEY = "implementandojwt"  # Cambia esta clave por una segura en producción
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # -----------------------------
 # Modelos SQLAlchemy
@@ -136,14 +142,34 @@ def get_object_or_404(db: Session, model, obj_id: int):
         raise HTTPException(status_code=404, detail=f"{model.__name__} no encontrado")
     return obj
 
+# Función para crear JWT
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+# Actualización de get_current_user para usar JWT
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> UserDB:
-    user = get_user(db, token)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales de autenticación inválidas",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Credenciales de autenticación inválidas",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+    user = get_user(db, username)
+    if user is None:
+        raise credentials_exception
     return user
 
 def verify_role(required_roles: List[str]):
@@ -160,10 +186,13 @@ def verify_role(required_roles: List[str]):
 # Esquemas Pydantic
 # -----------------------------
 class User(BaseModel):
+    id: int
     username: str
     disabled: bool = False
     role: str
-    eps: str = None  # Para clientes, se mostrará el nombre de la EPS si existe
+    eps: Optional[str] = None
+    class Config:
+        from_attributes = True 
 
 class UserCreate(BaseModel):
     username: str
@@ -205,7 +234,7 @@ class FinancialMovement(BaseModel):
     description: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class StockMovement(BaseModel):
     id: int
@@ -215,7 +244,12 @@ class StockMovement(BaseModel):
     description: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+# Esquema para respuesta de token JWT
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
 # -----------------------------
 # Inicialización de datos (Roles y usuario admin)
@@ -261,7 +295,7 @@ app = FastAPI()
 # -----------------------------
 origins = [
     "http://localhost:3000",  # Origen de tu frontend
-    # Puedes agregar otros orígenes si es necesario
+    "http://172.18.0.3:3000",
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -292,7 +326,7 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Usuario registrado exitosamente"}
 
-@app.post("/token")
+@app.post("/token", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """Generar token para autenticación."""
     user = authenticate_user(db, form_data.username, form_data.password)
@@ -301,7 +335,11 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Nombre de usuario o contraseña incorrectos"
         )
-    return {"access_token": user.username, "token_type": "bearer"}
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username, "role": user.role.name}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/users/", response_model=List[User])
 async def list_users(db: Session = Depends(get_db), current_user: UserDB = Depends(verify_role(["admin"]))):
@@ -310,6 +348,7 @@ async def list_users(db: Session = Depends(get_db), current_user: UserDB = Depen
     result = []
     for user in users:
         user_data = {
+            "id": user.id,  # Agregado el campo id
             "username": user.username,
             "disabled": user.disabled,
             "role": user.role.name,
@@ -410,7 +449,12 @@ async def delete_out_of_stock_products(db: Session = Depends(get_db)):
 # Endpoints de Órdenes
 # -----------------------------
 def get_order(db: Session, order_id: int) -> OrderDB:
-    return db.query(OrderDB).filter(OrderDB.id == order_id).first()
+    return (
+        db.query(OrderDB)
+        .options(joinedload(OrderDB.items).joinedload(OrderItemDB.product))
+        .filter(OrderDB.id == order_id)
+        .first()
+    )
 
 @app.post("/orders/")
 async def create_order(order: OrderCreateRequest, db: Session = Depends(get_db), 
