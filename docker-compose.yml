@@ -1,19 +1,22 @@
 services:
   backend:
     build: ./backend
+    env_file:
+      - .env
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
     environment:
-      - ENV=development
+      - ENV=production
+      - AWS_REGION=us-east-1
+      - BUCKET_NAME=imagenes-productos-farmacia
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+
 
   frontend:
     build: ./frontend
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     depends_on:
       - backend
