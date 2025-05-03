@@ -147,12 +147,6 @@ Farmacia/
 
 Consulta la documentación interactiva generada por FastAPI en `http://localhost:8000/docs` para probar y explorar todos los endpoints disponibles.
 
-## Integrantes:
-- Miguel Velasco
-- Juan Ballesteros
-- Manuel Cardenas
-- Juan Wilches
-
 
 ## Contribuciones
 
