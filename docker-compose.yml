@@ -1,4 +1,5 @@
 services:
+  
   backend:
     build: ./backend
     env_file:
@@ -12,7 +13,13 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
-
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      # variables para Selenium Remote WebDriver
+      - SELENIUM_HOST=selenium
+      - SELENIUM_PORT=4444
+    depends_on:
+      - selenium
 
   frontend:
     build: ./frontend
@@ -20,3 +27,9 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+  
+  selenium:
+    image: selenium/standalone-firefox:latest
+    container_name: selenium
+    ports:
+      - "4444:4444"
