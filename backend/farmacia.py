@@ -11,6 +11,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship, joinedload
 import jwt # Importamos PyJWT
 import boto3
+from selenium import webdriver
+from selenium.webdriver import Remote
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.common.by import By
+import time
+import urllib.parse
+import stripe
 
 # -----------------------------
 # Configuración de la base de datos
@@ -64,6 +71,8 @@ class OrderDB(Base):
     status = Column(String, default="pending")
     total = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
+    stripe_payment_intent_id = Column(String, nullable=True)
+    payment_status = Column(String, default="unpaid")
     
     client = relationship("UserDB")
     items = relationship("OrderItemDB", back_populates="order")
@@ -109,6 +118,14 @@ class StockMovementDB(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     change = Column(Integer)  # negativo para disminución, positivo para aumento
     description = Column(String)
+
+class ExternalPrice(Base):
+    __tablename__ = "external_prices"
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"))
+    price = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 # Crear todas las tablas
 Base.metadata.create_all(bind=engine)
@@ -255,6 +272,10 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+# Creacion de un pago
+class CreatePayment(BaseModel):
+    order_id: int
+
 # -----------------------------
 # Inicialización de datos (Roles y usuario admin)
 # -----------------------------
@@ -299,7 +320,7 @@ app = FastAPI()
 # -----------------------------
 origins = [
     "http://localhost:3000",  # Origen de tu frontend
-    "http://172.18.0.3:3000",
+    "http://172.18.0.4:3000",
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -312,6 +333,13 @@ app.add_middleware(
 #Configuración para acceso a S3
 s3 = boto3.client("s3", region_name="us-east-1")
 BUCKET_NAME = os.getenv("BUCKET_NAME", "imagenes-productos-farmacia")
+
+#Remote WebDriver Selenium
+SELENIUM_HOST = os.getenv("SELENIUM_HOST", "localhost")
+SELENIUM_PORT = os.getenv("SELENIUM_PORT", "4444")
+
+#Puerto de Stripe
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 # -----------------------------
 # Endpoints de Autenticación y Usuarios
@@ -711,7 +739,6 @@ def generate_upload_url(
         print(f"\n🚨 ERROR EN /upload-url 🚨\n{e}\n")
         raise HTTPException(status_code=500, detail=f"Error al generar URL: {str(e)}")
 
-
 @app.get("/imagen/{filename}")
 def get_image_url(filename: str, token: str = Depends(oauth2_scheme)):
     try:
@@ -726,3 +753,61 @@ def get_image_url(filename: str, token: str = Depends(oauth2_scheme)):
         return {"image_url": url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al generar URL de imagen: {str(e)}")
+    
+@app.get(
+    "/products/{product_id}/scrape-price",
+    dependencies=[Depends(verify_role(["admin", "almacenista"]))]
+)
+def compare_price_scraping(product_id: int, db: Session = Depends(get_db)):
+    product = get_object_or_404(db, ProductDB, product_id)
+    query = urllib.parse.quote(product.name.lower())
+    url = f"https://www.larebajavirtual.com/{query}?_q={query}&map=ft"
+
+    options = FirefoxOptions()
+    options.headless = True
+
+    driver = Remote(
+        command_executor=f"http://{SELENIUM_HOST}:{SELENIUM_PORT}/wd/hub",
+        options=options
+    )
+
+    try:
+        driver.get(url)
+        time.sleep(5)
+        price_elem = driver.find_element(By.CLASS_NAME, "vtex-product-price-1-x-sellingPriceValue")
+        precio_rebaja = price_elem.text
+    except Exception as e:
+        driver.quit()
+        raise HTTPException(503, f"Error al scrapear La Rebaja: {e}")
+    driver.quit()
+
+    return {
+        "producto": product.name,
+        "precio_interno": product.price,
+        "precio_rebaja": precio_rebaja,
+        "url": url
+    }
+
+@app.post("/create-payment-intent")
+def create_payment_intent(data: CreatePayment, db: Session = Depends(get_db),
+                          current_user: UserDB = Depends(verify_role(["cliente", "admin"]))):
+    # 1) Carga la orden
+    order = db.query(OrderDB).filter(OrderDB.id == data.order_id).first()
+    if not order or (current_user.role.name == "cliente" and order.client_id != current_user.id):
+        raise HTTPException(404, "Orden no encontrada")
+    if order.payment_status == "paid":
+        raise HTTPException(400, "Orden ya pagada")
+
+    # 2) Crea un PaymentIntent en Stripe
+    intent = stripe.PaymentIntent.create(
+        amount=int(order.total * 100),  # Stripe trabaja en centavos
+        currency="cop",
+        metadata={"order_id": order.id},
+    )
+
+    # 3) Guarda el ID en tu base
+    order.stripe_payment_intent_id = intent.id
+    db.commit()
+
+    # 4) Devuelve al frontend el client_secret
+    return {"clientSecret": intent.client_secret}
