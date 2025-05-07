@@ -1,78 +1,137 @@
 
 # 💊 FarmaciaApp
 
-**FarmaciaApp** es una aplicación web integral para la gestión de farmacias. Combina un backend desarrollado con FastAPI y un frontend interactivo hecho en React. Permite administrar usuarios, productos, órdenes, EPS, y controlar detalladamente movimientos económicos y de inventario.
+**FarmaciaApp** es una aplicación web integral para la gestión de farmacias, diseñada para facilitar el control de productos, usuarios, órdenes, entidades de salud (EPS), movimientos financieros y de inventario. Incorpora además funcionalidades avanzadas como integración con AWS, gestión de imágenes, pasarela de pagos y comparación de precios con otras farmacias mediante web scraping.
 
-## 🧩 Tecnologías Utilizadas
+---
 
-- **Backend:** FastAPI (Python)
-- **Frontend:** React
-- **Base de Datos:** SQLite
-- **Contenedores:** Docker & Docker Compose
+## 🚀 Tecnologías Principales
 
-## ⚙️ Funcionalidades
+- **Backend**: FastAPI + SQLAlchemy + SQlite
+- **Frontend**: React + Axios + React Router
+- **Base de datos**: SQlite (con Docker)
+- **DevOps**: Docker + Docker Compose
+- **Servicios en la nube**: AWS S3, Lambda, API Gateway
+- **Otros**: Pasarela de pagos, Web Scraping con Selenium
 
-### 🔐 Gestión de Usuarios
-- Registro y autenticación de usuarios.
-- Roles disponibles: `admin`, `almacenista`, `cliente`.
-- Autenticación mediante OAuth2 con tokens Bearer.
+---
+
+## ⚙️ Funcionalidades Destacadas
+
+### 🧑‍⚕️ Gestión de Usuarios y Roles
+- Registro y autenticación con OAuth2 (JWT).
+- Roles: `admin`, `almacenista`, `cliente`.
+- Panel de administración según permisos.
 
 ### 📦 Gestión de Productos
-- CRUD de productos.
-- Gestión de stock.
-- Visualización de imágenes asociadas a productos.
+- Creación, edición, eliminación y visualización de productos.
+- Imágenes asociadas almacenadas en **AWS S3**.
+- Control automático de stock.
 
-### 🏥 Gestión de EPS
-- Administración de entidades promotoras de salud.
-- Asociación de usuarios a EPS.
+### 🛒 Órdenes y Carrito de Compras
+- Flujo tipo e-commerce para usuarios autenticados.
+- Agregar/eliminar productos del carrito.
+- Generación y seguimiento de órdenes de compra.
 
-### 📄 Gestión de Órdenes
-- Creación y seguimiento de órdenes.
-- Registro de movimientos económicos y de inventario.
+### 🏥 EPS y Afiliaciones
+- CRUD de Entidades Promotoras de Salud.
+- Asociación de usuarios con EPS.
 
-## 🚀 Instalación y Ejecución
+### 💵 Movimientos Financieros
+- Registro de ingresos y egresos.
+- Consultas por tipo, fecha, usuario o monto.
 
-### Requisitos Previos
-- Docker
-- Docker Compose
+### 📤 Almacenamiento en AWS S3
+- Subida y visualización de imágenes de productos.
+- URLs públicas protegidas.
 
-### Pasos
+### 🔐 API Gateway + Lambda (AWS)
+- Validación de productos duplicados vía función Lambda.
+- Control de acceso por endpoint.
 
-1. Clona el repositorio:
+### 💳 Pasarela de Pagos
+- Integración con pasarela como Stripe.
+- Procesamiento de compras en línea.
+- Confirmación de pagos y actualización de estado de la orden.
 
-   ```bash
-   git clone https://github.com/Zephyrodes/FarmaciaApp.git
-   cd FarmaciaApp
-   ```
+### 🕵️ Comparación de Precios (Scraping)
+- Scraping de precios de medicamentos en farmacias externas.
+- Comparación automática de precios al momento de crear una orden.
 
-2. Construye y levanta los contenedores:
-
-   ```bash
-   docker-compose up --build
-   ```
-
-3. Accede a la aplicación:
-   - Frontend: [http://localhost:3000](http://localhost:3000)
-   - Backend (API docs): [http://localhost:8000/docs](http://localhost:8000/docs)
+---
 
 ## 📁 Estructura del Proyecto
 
-```
 FarmaciaApp/
-├── backend/                # Backend en FastAPI
-│   ├── app/                # Código fuente del backend
-│   ├── requirements.txt    # Dependencias del backend
-│   └── ...
-├── frontend/               # Aplicación React
-│   ├── src/                # Componentes y vistas
-│   └── ...
-├── imagenesProductos/      # Imágenes de productos
-├── docker-compose.yml      # Configuración de contenedores
-└── README.md               # Documentación del proyecto
-```
+├── backend/
+├── frontend/
+├── imagenesProductos/
+├── docker-compose.yml
+└── README.md
 
-## 📬 Contacto
+---
 
-Para más información o soporte:
+## 🐳 Despliegue Rápido con Docker
 
-- **GitHub:** [Zephyrodes](https://github.com/Zephyrodes)
+1. Clona el repositorio:
+   git clone https://github.com/Zephyrodes/FarmaciaApp.git
+   cd FarmaciaApp
+
+2. Inicia los servicios:
+   docker-compose up --build
+
+3. Accede a:
+   - Frontend: http://localhost:3000
+   - API Docs: http://localhost:8000/docs
+
+---
+
+## 🌐 Configuración en AWS
+
+- S3 para almacenamiento de imágenes.
+- Lambda + API Gateway para validaciones.
+- RDS opcional para base de datos gestionada.
+
+---
+
+## 📦 Ejemplo de Endpoint para Pago
+
+POST /api/payments
+Authorization: Bearer <token>
+{
+  "order_id": "12345",
+  "amount": 48000,
+  "payment_method": "credit_card"
+}
+
+---
+
+## 🔎 Web Scraping
+
+Comparación con:
+- La Rebaja Virtual
+
+---
+
+## 🛡️ Seguridad y Control
+
+- JWT y OAuth2
+- HTTPS recomendado
+
+---
+
+## 🤝 Contribuciones
+
+¡Las contribuciones son bienvenidas! Usa issues o pull requests.
+
+---
+
+## 📄 Licencia
+
+Licencia MIT. Ver archivo LICENSE.
+
+---
+
+## 🧠 Autor
+
+Desarrollado por [@Zephyrodes](https://github.com/Zephyrodes)
