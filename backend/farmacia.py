@@ -1,15 +1,16 @@
 import os
 from datetime import datetime, timedelta
 from typing import List, Optional
+from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException, status, Request, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
-from pydantic import BaseModel
+from pydantic import BaseModel, constr, conint
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship, joinedload
-import jwt # Importamos PyJWT
+import jwt
 import boto3
 from selenium import webdriver
 from selenium.webdriver import Remote
@@ -18,23 +19,72 @@ from selenium.webdriver.common.by import By
 import time
 import urllib.parse
 import stripe
+import requests
+import json
+import re
+from rapidfuzz import fuzz
+from cryptography.fernet import Fernet, InvalidToken
+from fastapi.responses import JSONResponse
+import secrets
+import logging
+
+load_dotenv()
 
 # -----------------------------
-# Configuración de la base de datos
+# Configuración de la base de datos (MySQL)
 # -----------------------------
-DATABASE_URL = "sqlite:///./ADB.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL no configurada en el entorno")
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # -----------------------------
-# Seguridad
+# Seguridad: Hashing y cifrado (Fernet)
 # -----------------------------
+# Genera una nueva clave segura
+key = Fernet.generate_key()
+secret = secrets.token_urlsafe(32)
+# Contexto bcrypt para hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# Clave de cifrado Fernet
+FERNET_KEY = key
+if not FERNET_KEY:
+    raise RuntimeError("FERNET_KEY no configurada")
+cipher_suite = Fernet(FERNET_KEY)
 
-# Constantes para JWT
-SECRET_KEY = "implementandojwt"  # Cambia esta clave por una segura en producción
+# Funciones de hashing + cifrado de contraseñas
+
+def get_password_hash(password: str) -> str:
+    # 1) genera hash bcrypt
+    bcrypt_hash = pwd_context.hash(password)
+    # 2) cifra el hash con Fernet
+    token = cipher_suite.encrypt(bcrypt_hash.encode())
+    # 3) devuelve el token en base64 (str)
+    return token.decode()
+
+def verify_password(plain_password: str, token_hash: str) -> bool:
+    try:
+        # 1) descifra el token a bytes -> bcrypt_hash
+        decrypted = cipher_suite.decrypt(token_hash.encode())
+    except Exception:
+        return False
+    # 2) compara con bcrypt
+    return pwd_context.verify(plain_password, decrypted.decode())
+
+# -----------------------------
+# Configuración JWT
+# -----------------------------
+SECRET_KEY = secret
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -44,35 +94,34 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 class RoleDB(Base):
     __tablename__ = "roles"
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True)
+    name = Column(String(50), unique=True, index=True)
 
 class UserDB(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
+    username = Column(String(50), unique=True, index=True)
+    hashed_password = Column(String(200))
     disabled = Column(Boolean, default=False)
     role_id = Column(Integer, ForeignKey("roles.id"))
     role = relationship("RoleDB")
-    eps_relation = relationship("ClientEPSDB", uselist=False, back_populates="user", cascade="all, delete")
 
 class ProductDB(Base):
     __tablename__ = "products"
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True)
+    name = Column(String(100), unique=True)
     stock = Column(Integer)
     price = Column(Integer)
-    image_filename = Column(String, nullable=True)
+    image_filename = Column(String(200), nullable=True)
 
 class OrderDB(Base):
     __tablename__ = "orders"
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("users.id"))
-    status = Column(String, default="pending")
+    status = Column(String(20), default="pending")
     total = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
-    stripe_payment_intent_id = Column(String, nullable=True)
-    payment_status = Column(String, default="unpaid")
+    stripe_payment_intent_id = Column(String(100), nullable=True)
+    payment_status = Column(String(20), default="unpaid")
     
     client = relationship("UserDB")
     items = relationship("OrderItemDB", back_populates="order")
@@ -87,21 +136,6 @@ class OrderItemDB(Base):
     order = relationship("OrderDB", back_populates="items")
     product = relationship("ProductDB")
 
-class EPSDB(Base):
-    __tablename__ = "eps"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True)
-    discount = Column(Float, default=0.0)
-
-class ClientEPSDB(Base):
-    __tablename__ = "client_eps"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
-    eps_id = Column(Integer, ForeignKey("eps.id", ondelete="CASCADE"))
-    
-    user = relationship("UserDB", back_populates="eps_relation")
-    eps = relationship("EPSDB")
-
 # Nuevos modelos para movimientos económicos
 class FinancialMovementDB(Base):
     __tablename__ = "financial_movements"
@@ -109,7 +143,7 @@ class FinancialMovementDB(Base):
     order_id = Column(Integer, ForeignKey("orders.id"))
     timestamp = Column(DateTime, default=datetime.utcnow)
     amount = Column(Float)
-    description = Column(String)
+    description = Column(String(255))
 
 class StockMovementDB(Base):
     __tablename__ = "stock_movements"
@@ -117,19 +151,32 @@ class StockMovementDB(Base):
     product_id = Column(Integer, ForeignKey("products.id"))
     timestamp = Column(DateTime, default=datetime.utcnow)
     change = Column(Integer)  # negativo para disminución, positivo para aumento
-    description = Column(String)
+    description = Column(String(255))
 
 class ExternalPrice(Base):
     __tablename__ = "external_prices"
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"))
-    price = Column(String, nullable=False)
-    url = Column(String, nullable=False)
+    price = Column(String(20), nullable=False)
+    url = Column(String(2083), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 # Crear todas las tablas
 Base.metadata.create_all(bind=engine)
 
+# -----------------------------
+# Modelos Pydantic
+# -----------------------------
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str
+
+class ProductCreate(BaseModel):
+    name: str
+    stock: int
+    price: int
+    image_filename: Optional[str] = None
 # -----------------------------
 # Utilidades y funciones auxiliares
 # -----------------------------
@@ -139,12 +186,6 @@ def get_db() -> Session:
         yield db
     finally:
         db.close()
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
 
 def get_user(db: Session, username: str) -> UserDB:
     return db.query(UserDB).filter(UserDB.username == username).first()
@@ -209,14 +250,8 @@ class User(BaseModel):
     username: str
     disabled: bool = False
     role: str
-    eps: Optional[str] = None
     class Config:
         from_attributes = True 
-
-class UserCreate(BaseModel):
-    username: str
-    password: str
-    role: str
 
 class Product(BaseModel):
     name: str
@@ -234,17 +269,8 @@ class OrderItemCreate(BaseModel):
     product_id: int
     quantity: int
 
-# Se elimina client_id, se usa el usuario autenticado
 class OrderCreateRequest(BaseModel):
     items: List[OrderItemCreate]
-
-class EPSCreate(BaseModel):
-    name: str
-    discount: float
-
-class AssignEPS(BaseModel):
-    user_id: int
-    eps_id: int
 
 # Esquemas para movimientos (opcionalmente se pueden crear schemas de respuesta)
 class FinancialMovement(BaseModel):
@@ -320,7 +346,7 @@ app = FastAPI()
 # -----------------------------
 origins = [
     "http://localhost:3000",  # Origen de tu frontend
-    "http://172.18.0.4:3000",
+    "http://172.18.0.5:3000",
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -342,36 +368,51 @@ SELENIUM_PORT = os.getenv("SELENIUM_PORT", "4444")
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 # -----------------------------
+# Configuración Lambda URLs
+# -----------------------------
+LAMBDA_URL_PRODUCTO = "https://fnoo5iqzzf.execute-api.us-east-1.amazonaws.com/prod/validate-product"
+LAMBDA_URL_USERNAME = "https://fnoo5iqzzf.execute-api.us-east-1.amazonaws.com/prod/validate-username"
+
+# -----------------------------
 # Endpoints de Autenticación y Usuarios
 # -----------------------------
+
+MAX_PAYLOAD_SIZE = 1 * 1024 * 1024  # Límite de 1MB
 
 @app.post("/register", dependencies=[Depends(verify_role(["admin"]))])
 async def register(user: UserCreate, db: Session = Depends(get_db)):
     """Registrar un nuevo usuario (solo admin)."""
 
-    import requests
-    import json
-
-    # Validar formato del username con Lambda
+    # 1) Validar formato del username con Lambda
     try:
         lambda_response = requests.post(
-            "https://fnoo5iqzzf.execute-api.us-east-1.amazonaws.com/prod/validar-datos",
-            json={"username": user.username}
+            LAMBDA_URL_USERNAME,  # URL para validar el username
+            json={"username": user.username},  # Solo validación del username
+            headers={"Content-Type": "application/json"}
         )
-        if lambda_response.status_code == 400:
-            errores = json.loads(lambda_response.json()["body"])["errores"]
-            raise HTTPException(status_code=400, detail=errores)
+
+        if lambda_response.status_code != 200:
+            body = lambda_response.json()
+            error_msg = body.get("error", "Error desconocido en validación de username")
+            raise HTTPException(status_code=lambda_response.status_code, detail=error_msg)
+        
+        # Usar username validado o el original si no viene
+        validated_username = lambda_response.json().get("data", {}).get("username", user.username)
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en validación de username vía Lambda: {str(e)}")
 
-    existing_user = get_user(db, user.username)
+    # 2) Verificar si el username ya existe en la base de datos
+    existing_user = db.query(UserDB).filter(UserDB.username == validated_username).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="El usuario ya existe")
 
+    # 3) Verificar que el rol sea válido
     role = db.query(RoleDB).filter(RoleDB.name == user.role).first()
     if not role:
         raise HTTPException(status_code=400, detail="Rol inválido")
 
+    # 4) Crear el nuevo usuario
     new_user = UserDB(
         username=user.username,
         hashed_password=get_password_hash(user.password),
@@ -379,7 +420,9 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
     )
     db.add(new_user)
     db.commit()
+
     return {"message": "Usuario registrado exitosamente"}
+
 
 @app.post("/token", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -407,10 +450,7 @@ async def list_users(db: Session = Depends(get_db), current_user: UserDB = Depen
             "username": user.username,
             "disabled": user.disabled,
             "role": user.role.name,
-            "eps": None
         }
-        if user.role.name == "cliente" and user.eps_relation:
-            user_data["eps"] = user.eps_relation.eps.name
         result.append(user_data)
     return result
 
@@ -421,8 +461,6 @@ async def get_user_by_id(id: int, db: Session = Depends(get_db), current_user: U
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     data = {"username": user.username, "disabled": user.disabled, "role": user.role.name}
-    if user.role.name == "cliente":
-        data["eps"] = user.eps_relation.eps.name if user.eps_relation else "Sin EPS asignada"
     return data
 
 @app.put("/users/{id}")
@@ -450,32 +488,26 @@ async def delete_user(id: int, db: Session = Depends(get_db), current_user: User
 # Endpoints de Productos
 # -----------------------------
 
+# Configura el logging en el backend
+logging.basicConfig(level=logging.DEBUG)
+
 @app.post("/products/", dependencies=[Depends(verify_role(["admin", "almacenista"]))])
-async def create_product(product: Product, confirmado: Optional[bool] = False, db: Session = Depends(get_db)):
+async def create_product(
+    product: ProductCreate, 
+    confirmado: Optional[bool] = Query(False),  # Confirmado como parámetro de consulta
+    db: Session = Depends(get_db)
+):
     """Crear un nuevo producto, permitiendo confirmación manual si hay ambigüedad en el nombre."""
 
-    from rapidfuzz import fuzz
-    import requests
-    import json
+    # 1) Validar tamaño del payload (1MB)
+    raw_data = json.dumps(product.dict())
+    if len(raw_data.encode('utf-8')) > 1 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Payload demasiado grande (máx. 1 MB)")
 
-    # Buscar similitudes con productos ya existentes
-    productos = db.query(ProductDB).all()
-    for existente in productos:
-        similitud = fuzz.ratio(product.name.lower(), existente.name.lower())
-        if similitud >= 70 and not confirmado:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "mensaje": "Este producto es similar a uno ya existente.",
-                    "producto_similar": existente.name,
-                    "confirmacion_requerida": True
-                }
-            )
-
-    # Validación estructural vía Lambda (precio, stock)
+    # 2) Validación del producto vía Lambda (solo precio y stock)
     try:
         lambda_response = requests.post(
-            "https://fnoo5iqzzf.execute-api.us-east-1.amazonaws.com/prod/validar-datos",
+            LAMBDA_URL_PRODUCTO,  # URL de la función Lambda para validar producto
             json={
                 "precio": product.price,
                 "stock": product.stock
@@ -485,17 +517,44 @@ async def create_product(product: Product, confirmado: Optional[bool] = False, d
             errores = json.loads(lambda_response.json()["body"])["errores"]
             raise HTTPException(status_code=400, detail=errores)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en validación Lambda: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error en validación de producto: {str(e)}")
 
-    # Guardar producto si todo es válido
+    # 3) Verificar similitudes con productos ya existentes usando RapidFuzz
+    productos = db.query(ProductDB).all()
+    for existente in productos:
+        similitud = fuzz.ratio(product.name.lower(), existente.name.lower())
+        logging.debug(f"Similitud con el producto '{existente.name}': {similitud}")
+
+        if similitud >= 70:
+            if not confirmado:
+                logging.debug(f"Similitud alta detectada: {existente.name}, se necesita confirmación.")
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={
+                        "mensaje": "Este producto es similar a uno ya existente.",
+                        "producto_similar": existente.name,
+                        "confirmacion_requerida": True
+                    }
+                )
+            break
+
+    # 4) Sanitización para prevenir XSS
+    def sanitize(val):
+        return re.sub(r"[<>\"']", "", str(val))
+
+    sanitized = {k: sanitize(v) if isinstance(v, str) else v for k, v in product.dict().items()}
+
+    # 5) Guardar producto si todo es válido
     new_product = ProductDB(
-        name=product.name,
-        stock=product.stock,
-        price=product.price,
-        image_filename=product.image_filename
+        name=sanitized["name"],
+        price=sanitized["price"],
+        stock=sanitized["stock"],
+        image_filename=sanitized.get("image_filename", None)
     )
     db.add(new_product)
     db.commit()
+
+    logging.debug("Producto guardado exitosamente.")  # Debugging: Log de éxito
     return {"message": "Producto agregado exitosamente"}
 
 @app.get("/products/")
@@ -573,9 +632,7 @@ async def create_order(order: OrderCreateRequest, db: Session = Depends(get_db),
         product.stock -= item.quantity  # Actualizar stock
         order_item = OrderItemDB(order_id=new_order.id, product_id=product.id, quantity=item.quantity)
         db.add(order_item)
-    # Si el usuario tiene EPS asignada, se aplica el descuento al total de la orden.
-    discount = current_user.eps_relation.eps.discount if current_user.eps_relation else 0
-    new_order.total = total_price * (1 - discount / 100)
+    new_order.total = total_price
     db.commit()
     return {"message": "Pedido creado exitosamente", "order_id": new_order.id}
 
@@ -668,56 +725,6 @@ async def list_stock_movements(db: Session = Depends(get_db),
     """Listar movimientos de stock."""
     movements = db.query(StockMovementDB).all()
     return movements
-
-# -----------------------------
-# Endpoints de EPS
-# -----------------------------
-@app.post("/eps/", dependencies=[Depends(verify_role(["admin"]))])
-async def create_eps(eps: EPSCreate, db: Session = Depends(get_db)):
-    """Crear una nueva EPS."""
-    new_eps = EPSDB(name=eps.name, discount=eps.discount)
-    db.add(new_eps)
-    db.commit()
-    return {"message": "EPS creada exitosamente"}
-
-@app.get("/eps/")
-async def list_eps(db: Session = Depends(get_db)):
-    """Listar todas las EPS."""
-    return db.query(EPSDB).all()
-
-@app.post("/assign_eps/")
-async def assign_eps(assign_data: AssignEPS, db: Session = Depends(get_db), 
-                     current_user: UserDB = Depends(verify_role(["admin"]))):
-    """Asignar una EPS a un cliente."""
-    user = get_object_or_404(db, UserDB, assign_data.user_id)
-    if user.role.name != "cliente":
-        raise HTTPException(status_code=400, detail="Solo los clientes pueden tener EPS asignada")
-    
-    eps = get_object_or_404(db, EPSDB, assign_data.eps_id)
-    existing_relation = db.query(ClientEPSDB).filter_by(user_id=user.id).first()
-    if existing_relation:
-        existing_relation.eps_id = eps.id
-    else:
-        new_relation = ClientEPSDB(user_id=user.id, eps_id=eps.id)
-        db.add(new_relation)
-    db.commit()
-    return {"message": "EPS asignada correctamente"}
-
-@app.get("/products/{id}")
-async def get_product_with_discount(id: int, db: Session = Depends(get_db),
-                                    current_user: UserDB = Depends(verify_role(["cliente", "admin"]))):
-    """Obtener un producto con descuento aplicado (si el cliente tiene EPS asignada)."""
-    product = get_object_or_404(db, ProductDB, id)
-    client_eps = db.query(ClientEPSDB).filter_by(user_id=current_user.id).first()
-    discount = client_eps.eps.discount if client_eps else 0.0
-    final_price = product.price * (1 - discount / 100)
-    return {
-        "name": product.name,
-        "stock": product.stock,
-        "original_price": product.price,
-        "discounted_price": final_price,
-        "image_filename": product.image_filename
-    }
 
 @app.get("/upload-url")
 def generate_upload_url(
