@@ -11,3 +11,6 @@ rapidfuzz
 requests
 selenium
 stripe
+cryptography
+python-dotenv
+pymysql
