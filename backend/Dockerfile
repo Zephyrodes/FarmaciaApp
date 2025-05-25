@@ -10,4 +10,4 @@ RUN chmod +x /usr/local/bin/wait-for-it.sh
 
 COPY . .
 
-CMD ["wait-for-it.sh", "db:3306", "--timeout=300", "--", "uvicorn", "farmacia:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["wait-for-it.sh", "db:3306", "--timeout=330", "--", "uvicorn", "farmacia:app", "--host", "0.0.0.0", "--port", "8000"]
